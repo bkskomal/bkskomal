@@ -1,0 +1,477 @@
+Below is a complete step-by-step guide to host your ASP.NET + PostgreSQL app on Ubuntu 22.04. This approach is production-ready and commonly used.
+
+We will set up:
+
+.NET Runtime
+
+PostgreSQL
+
+Nginx (reverse proxy)
+
+systemd service (auto start API)
+
+1️⃣ Update Ubuntu
+
+First update the system.
+
+sudo apt update
+sudo apt upgrade -y
+2️⃣ Install .NET Runtime
+
+Add Microsoft repo:
+
+wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+sudo apt update
+
+Install runtime:
+
+sudo apt install dotnet-runtime-8.0 -y
+
+Verify:
+
+dotnet --version
+3️⃣ Install PostgreSQL
+sudo apt install postgresql postgresql-contrib -y
+
+Start service:
+
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+Check status:
+
+sudo systemctl status postgresql
+4️⃣ Create Database
+
+Login to postgres:
+
+sudo -u postgres psql
+
+Create DB + user:
+
+CREATE DATABASE meetdb;
+
+CREATE USER meetuser WITH PASSWORD 'StrongPassword123';
+
+ALTER ROLE meetuser SET client_encoding TO 'utf8';
+ALTER ROLE meetuser SET default_transaction_isolation TO 'read committed';
+ALTER ROLE meetuser SET timezone TO 'UTC';
+
+GRANT ALL PRIVILEGES ON DATABASE meetdb TO meetuser;
+
+\q
+5️⃣ Update ASP.NET Connection String
+
+In appsettings.json:
+
+{
+  "ConnectionStrings": {
+    "Default": "Host=localhost;Port=5432;Database=meetdb;Username=meetuser;Password=StrongPassword123"
+  }
+}
+6️⃣ Publish Application
+
+From your dev machine:
+
+dotnet publish server/Meet.API -c Release -o publish
+
+Upload the publish folder to Ubuntu:
+
+Example:
+
+scp -r publish user@server:/opt/meet
+7️⃣ Run Application Test
+
+SSH into server:
+
+cd /opt/meet
+dotnet Meet.API.dll
+
+Test:
+
+curl http://localhost:5000
+
+If it works → stop the app.
+
+8️⃣ Create systemd Service
+
+Create service file:
+
+sudo nano /etc/systemd/system/meet.service
+
+Paste:
+
+[Unit]
+Description=Meet API
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/meet
+ExecStart=/usr/bin/dotnet /opt/meet/Meet.API.dll
+Restart=always
+RestartSec=10
+SyslogIdentifier=meet-api
+User=www-data
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://localhost:5000
+
+[Install]
+WantedBy=multi-user.target
+9️⃣ Enable Service
+
+Reload systemd:
+
+sudo systemctl daemon-reload
+
+Start service:
+
+sudo systemctl start meet
+
+Enable on boot:
+
+sudo systemctl enable meet
+
+Check logs:
+
+sudo journalctl -u meet -f
+🔟 Install Nginx
+sudo apt install nginx -y
+1️⃣1️⃣ Configure Reverse Proxy
+
+Create config:
+
+sudo nano /etc/nginx/sites-available/meet
+
+Paste:
+
+server {
+    listen 80;
+    server_name yourdomain.com;
+
+    location / {
+        proxy_pass         http://localhost:5000;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection keep-alive;
+        proxy_set_header   Host $host;
+        proxy_cache_bypass $http_upgrade;
+
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+
+Enable site:
+
+sudo ln -s /etc/nginx/sites-available/meet /etc/nginx/sites-enabled/
+
+Test:
+
+sudo nginx -t
+
+Restart:
+
+sudo systemctl restart nginx
+1️⃣2️⃣ Open Firewall
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+1️⃣3️⃣ Enable HTTPS (Recommended)
+
+Install certbot:
+
+sudo apt install certbot python3-certbot-nginx -y
+
+Run:
+
+sudo certbot --nginx
+Final Architecture
+Internet
+   │
+   ▼
+Nginx (80/443)
+   │
+   ▼
+ASP.NET API (localhost:5000)
+   │
+   ▼
+PostgreSQL (localhost:5432)
+Useful Commands
+
+Restart API:
+
+sudo systemctl restart meet
+
+View logs:
+
+sudo journalctl -u meet -f
+
+Restart Nginx:
+
+sudo systemctl restart nginx
+
+✅ Your ASP.NET API + PostgreSQL will now run on Ubuntu 22 with auto start and reverse proxy.
+
+If you'd like, I can also show a much better production setup using Docker Compose where:
+
+ASP.NET
+
+PostgreSQL
+
+Nginx
+
+all run together in containers (much easier to deploy and migrate).
+
+allow this server to connection from winscp using root password
+
+By default on Ubuntu 22.04, SSH usually blocks direct root password login for security. To allow WinSCP to connect using the root account and password, you must enable it in SSH configuration.
+
+⚠️ Security note: Enabling root login with password is not recommended for production servers. If possible, use a normal user + sudo. But here are the steps if you still want it.
+
+1️⃣ Set Root Password
+
+If root password is not set yet:
+
+sudo passwd root
+
+Enter a strong password.
+
+2️⃣ Edit SSH Configuration
+
+Open SSH config:
+
+sudo nano /etc/ssh/sshd_config
+
+Find these lines and update them.
+
+Change / add:
+PermitRootLogin yes
+PasswordAuthentication yes
+
+If they exist but are commented (#), remove #.
+
+Example final lines:
+
+PermitRootLogin yes
+PasswordAuthentication yes
+
+Save and exit.
+
+3️⃣ Restart SSH Service
+sudo systemctl restart ssh
+4️⃣ Allow SSH Through Firewall
+
+If firewall is enabled:
+
+sudo ufw allow ssh
+
+or:
+
+sudo ufw allow 22
+5️⃣ Connect from WinSCP
+
+Open WinSCP and use:
+
+File protocol: SFTP
+Host name: your-server-ip
+Port: 22
+User name: root
+Password: (root password)
+
+Click Login.
+
+6️⃣ If Login Still Fails
+
+Check SSH status:
+
+sudo systemctl status ssh
+
+Check SSH logs:
+
+sudo journalctl -u ssh -f
+Recommended Alternative (Much Safer)
+
+Instead of root login, create a deploy user:
+
+sudo adduser deploy
+sudo usermod -aG sudo deploy
+
+Then login with:
+
+username: deploy
+
+This is much safer.
+
+✅ After these steps, WinSCP will connect using the root password.
+
+If you'd like, I can also show a much safer production setup where:
+
+WinSCP uses SSH keys instead of passwords
+
+Root login stays disabled
+
+Deployments are automated.
+
+where to upload published code
+
+On Ubuntu 22, the standard practice is to place your published ASP.NET app in a dedicated directory under /var/www or /opt. Both work, but for APIs and services, /opt is usually cleaner.
+
+Below is the recommended approach.
+
+Recommended Folder Structure
+
+Create a directory:
+
+sudo mkdir -p /opt/meet
+
+Your published files should be uploaded here:
+
+/opt/meet/
+   Meet.API.dll
+   Meet.API.runtimeconfig.json
+   Meet.API.deps.json
+   appsettings.json
+   web.config
+   wwwroot/
+Upload Using WinSCP
+
+In WinSCP:
+
+Connect using SFTP
+
+Navigate to:
+
+/opt
+
+Upload your publish folder contents into:
+
+/opt/meet
+Fix Permissions
+
+After uploading:
+
+sudo chown -R www-data:www-data /opt/meet
+sudo chmod -R 755 /opt/meet
+
+This ensures your service can run the files.
+
+Test the Application
+
+Run manually first:
+
+cd /opt/meet
+dotnet Meet.API.dll
+
+Test:
+
+http://server-ip:5000/swagger
+
+If it works, stop it with CTRL+C.
+
+Connect with systemd Service
+
+Your earlier service file should point here:
+
+/etc/systemd/system/meet.service
+
+Example:
+
+WorkingDirectory=/opt/meet
+ExecStart=/usr/bin/dotnet /opt/meet/Meet.API.dll
+
+Start service:
+
+sudo systemctl start meet
+sudo systemctl enable meet
+Final Architecture
+/opt/meet                → ASP.NET API
+/var/log/nginx           → Nginx logs
+/etc/nginx/sites-enabled → Nginx config
+/var/lib/postgresql      → PostgreSQL database
+Quick Commands
+
+Restart API:
+
+sudo systemctl restart meet
+
+Check logs:
+
+sudo journalctl -u meet -f
+
+✅ Your published ASP.NET app should be uploaded to /opt/meet and run from there.
+
+If you'd like, I can also show you a clean production folder layout used in many SaaS systems, which separates:
+
+API
+
+React UI
+
+Logs
+
+Uploads
+
+Backups
+
+so the server stays organized as the project grows.
+
+permission denied to upload to opt folder using use deploy lets give full permission
+
+The error occurs because the deploy user does not have permission to write to /opt.
+Instead of giving full permissions to /opt (which is unsafe), the correct approach is to change ownership of the application folder.
+
+Follow these steps.
+
+1️⃣ Create the application folder
+sudo mkdir -p /opt/meet
+2️⃣ Give ownership to deploy
+sudo chown -R deploy:deploy /opt/meet
+
+Now the deploy user can upload files.
+
+3️⃣ Set proper permissions
+sudo chmod -R 755 /opt/meet
+
+This means:
+
+deploy → read/write/execute
+others → read/execute
+4️⃣ Upload with WinSCP
+
+In WinSCP connect with:
+
+User: deploy
+Path: /opt/meet
+
+Upload the published files.
+
+5️⃣ After upload (optional production step)
+
+If your service runs as www-data, change ownership:
+
+sudo chown -R www-data:www-data /opt/meet
+6️⃣ Start the service
+sudo systemctl restart meet
+
+Check logs:
+
+sudo journalctl -u meet -f
+⚠️ Avoid this (not recommended)
+
+Do NOT do:
+
+sudo chmod 777 /opt
+
+This would allow any user to modify system folders.
+
+Final structure
+/opt/meet
+   Meet.API.dll
+   appsettings.json
+   wwwroot/
+
+If you'd like, I can also show you a very useful deployment workflow where you upload builds to:
+
+/opt/meet/releases/
+
+and switch versions instantly without downtime.
